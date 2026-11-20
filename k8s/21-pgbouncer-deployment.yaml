@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: g7-academia
+  labels:
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/part-of: g7-academia
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pgbouncer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pgbouncer
+        app.kubernetes.io/part-of: g7-academia
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:latest
+          imagePullPolicy: IfNotPresent
+          # Replica o entrypoint definido no docker-compose.yml do projeto:
+          # gera o userlist em /tmp com as credenciais vindas do Secret.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              umask 077
+              printf '"%s" "%s"\n' "$DB_USER" "$DB_PASSWORD" > /tmp/userlist.txt
+              exec pgbouncer /etc/pgbouncer/pgbouncer.ini
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: g7-db-secret
+                  key: APP_DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: g7-db-secret
+                  key: APP_DB_PASSWORD
+          ports:
+            - name: pgbouncer
+              containerPort: 6432
+              protocol: TCP
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -p 6432"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -p 6432"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -p 6432"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: pgbouncer-config
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              subPath: pgbouncer.ini
+              readOnly: true
+      volumes:
+        - name: pgbouncer-config
+          configMap:
+            name: pgbouncer-config

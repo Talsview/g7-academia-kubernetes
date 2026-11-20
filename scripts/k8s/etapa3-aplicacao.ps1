@@ -48,7 +48,21 @@ function Wait-Deployment([string]$Name, [string]$Selector, [int]$TimeoutSeconds)
 Write-Host '=== G7 Academia | Etapa 3: aplicação replicada ===' -ForegroundColor Cyan
 
 Assert-Command 'kubectl'
-Assert-Command 'minikube'
+
+# Encontra o Minikube mesmo quando a pasta não está no PATH deste terminal.
+$minikubeCommand = Get-Command 'minikube' -ErrorAction SilentlyContinue
+if ($minikubeCommand) {
+    $minikubeExe = $minikubeCommand.Source
+}
+else {
+    $candidateMinikube = Join-Path $env:ProgramFiles 'Kubernetes\Minikube\minikube.exe'
+    if (Test-Path -LiteralPath $candidateMinikube) {
+        $minikubeExe = $candidateMinikube
+    }
+    else {
+        throw "Minikube não encontrado. Verifique: $candidateMinikube"
+    }
+}
 
 if (-not (Test-Path $envFile)) {
     throw '.env não encontrado na raiz. Execute a Etapa 2 primeiro e mantenha JWT_SECRET no .env.'
@@ -74,14 +88,31 @@ if ($envValues['JWT_SECRET'].Length -lt 32) {
 }
 
 Write-Host '[1/7] Conferindo cluster, banco e Secrets existentes...' -ForegroundColor Cyan
-$nodeReady = & kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
-if ($LASTEXITCODE -ne 0 -or $nodeReady -ne 'True') { throw 'O nó Kubernetes não está Ready. Verifique: kubectl get nodes.' }
+# Lê JSON e filtra em PowerShell para evitar problemas de aspas do JSONPath
+# ao chamar kubectl como processo nativo no Windows PowerShell.
+$nodesJson = & kubectl get nodes -o json
+if ($LASTEXITCODE -ne 0) { throw 'Não foi possível consultar os nós Kubernetes.' }
+$nodesObject = $nodesJson | ConvertFrom-Json
+$readyNodes = @()
+foreach ($node in $nodesObject.items) {
+    $readyCondition = $node.status.conditions | Where-Object { $_.type -eq 'Ready' } | Select-Object -First 1
+    if ($null -ne $readyCondition -and $readyCondition.status -eq 'True') {
+        $readyNodes += $node.metadata.name
+    }
+}
+if ($readyNodes.Count -eq 0) { throw 'Nenhum nó Kubernetes está Ready. Verifique: kubectl get nodes.' }
+
 & kubectl get namespace $namespace *> $null
 if ($LASTEXITCODE -ne 0) { throw "Namespace '$namespace' não encontrado. Execute as Etapas 1 e 2." }
 & kubectl get service db-service -n $namespace *> $null
 if ($LASTEXITCODE -ne 0) { throw 'Service db-service não encontrado. O PostgreSQL da Etapa 2 precisa estar implantado.' }
-$postgresReady = & kubectl get pod postgres-0 -n $namespace -o jsonpath='{.status.containerStatuses[0].ready}'
-if ($LASTEXITCODE -ne 0 -or $postgresReady -ne 'true') { throw 'postgres-0 não está Ready. Não vou alterar o banco; corrija a Etapa 2 antes de continuar.' }
+$postgresPodJson = & kubectl get pod postgres-0 -n $namespace -o json
+if ($LASTEXITCODE -ne 0) { throw 'Pod postgres-0 não encontrado. Não vou alterar o banco; corrija a Etapa 2 antes de continuar.' }
+$postgresPod = $postgresPodJson | ConvertFrom-Json
+$postgresReadyCondition = $postgresPod.status.conditions | Where-Object { $_.type -eq 'Ready' } | Select-Object -First 1
+if ($null -eq $postgresReadyCondition -or $postgresReadyCondition.status -ne 'True') {
+    throw 'postgres-0 não está Ready. Não vou alterar o banco; corrija a Etapa 2 antes de continuar.'
+}
 $dbSecretJson = & kubectl get secret g7-db-secret -n $namespace -o json
 if ($LASTEXITCODE -ne 0) { throw 'Secret g7-db-secret não encontrado. Reexecute a preparação de Secrets da Etapa 2.' }
 $dbSecret = $dbSecretJson | ConvertFrom-Json
@@ -109,12 +140,12 @@ finally {
 
 Write-Host '[3/7] Construindo imagem do backend Java 21 dentro do Minikube...' -ForegroundColor Cyan
 $backendPath = Join-Path $projectRoot 'backend'
-& minikube image build -t $backendImage $backendPath
+& $minikubeExe image build -t $backendImage $backendPath
 if ($LASTEXITCODE -ne 0) { throw 'Falha ao construir a imagem do backend. Confira a saída do Maven acima.' }
 
 Write-Host '[4/7] Construindo imagem do frontend Angular/Nginx dentro do Minikube...' -ForegroundColor Cyan
 $frontendPath = Join-Path $projectRoot 'frontend'
-& minikube image build -t $frontendImage $frontendPath
+& $minikubeExe image build -t $frontendImage $frontendPath
 if ($LASTEXITCODE -ne 0) { throw 'Falha ao construir a imagem do frontend. Confira a saída do npm/Angular acima.' }
 
 Write-Host '[5/7] Aplicando PgBouncer, backend, frontend e Services...' -ForegroundColor Cyan
@@ -143,5 +174,5 @@ Write-Host "`nEndpoints do frontend (esperado: 2 Pods):" -ForegroundColor Green
 
 Write-Host "`n=== Etapa 3 implantada ===" -ForegroundColor Green
 Write-Host 'A aplicação fica disponível pelo Service NodePort app-service.'
-Write-Host 'Em outro terminal, execute: minikube service app-service -n g7-academia --url'
+Write-Host "Em outro terminal, execute: `& '$minikubeExe' service app-service -n g7-academia --url"
 Write-Host 'Mantenha esse comando aberto enquanto acessar a URL no navegador.'

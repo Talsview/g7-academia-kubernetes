@@ -1,143 +1,264 @@
-# G7 — Sistema de Controle de Frequência e Mensalidades de Academia
+# G7 Academia — Projeto Kubernetes e Observabilidade
 
-Aplicação web Fullstack **interna (Single Tenant)** para gerenciar alunos, planos, matrículas, mensalidades e acessos de uma academia. Projeto da disciplina *Desenvolvimento de Aplicações Fullstack com Administração e Segurança Avançada no PostgreSQL* (Grupo G7).
+**Integrantes:** Davi Martins e Caio Vinicius  
+**Projeto:** G7 Academia — sistema interno de controle de alunos, planos, matrículas, mensalidades e acessos.
 
-## Tecnologias
+Este repositório adapta o sistema original G7 Academia para um cluster Kubernetes local com Minikube. A aplicação mantém o frontend Angular, a API Spring Boot, o PgBouncer e o PostgreSQL, e acrescenta uma stack de observabilidade com Prometheus, Loki, Grafana Alloy, Tempo, OpenTelemetry Collector e Grafana.
+
+> **Escopo do ambiente:** laboratório acadêmico local, executado em Minikube com Docker Desktop. Os manifestos de observabilidade usam armazenamento local e não representam uma configuração de alta disponibilidade para produção.
+
+## 1. Arquitetura
+
+```text
+Navegador
+   |
+   v
+Service app-service (NodePort)
+   |
+   v
+Frontend Angular + Nginx (2 réplicas)
+   |
+   v
+Service backend (ClusterIP:8080)
+   |
+   v
+Spring Boot (2 réplicas)
+   |
+   v
+PgBouncer (ClusterIP:6432)
+   |
+   v
+PostgreSQL 16 (StatefulSet + PVC de 2 GiB)
+```
+
+Observabilidade:
+
+```text
+Métricas: Spring Boot / Kubernetes -> Prometheus -> Grafana
+Logs: Pods do Kubernetes -> Grafana Alloy -> Loki -> Grafana
+Traces: Spring Boot (OTLP) -> OpenTelemetry Collector -> Tempo -> Grafana
+```
+
+## 2. Tecnologias utilizadas
+
 | Camada | Tecnologia |
 |---|---|
-| Backend | Java 21, Spring Boot 3.3, Spring Security (JWT + BCrypt), JDBC (`NamedParameterJdbcTemplate`, prepared statements), HikariCP |
-| Frontend | Angular 18 (SPA, standalone components), TypeScript, HTML5/CSS3, Nginx |
-| Banco | PostgreSQL 16, pgcrypto, PgBouncer 1.22+ |
-| Infra | Docker, Docker Compose |
+| Frontend | Angular 18, TypeScript e Nginx |
+| Backend | Java 21, Spring Boot 3.3.5, Spring Security e JWT |
+| Banco | PostgreSQL 16 |
+| Pool de conexões | PgBouncer |
+| Contêineres | Docker Desktop |
+| Orquestração local | Kubernetes com Minikube |
+| Métricas | Prometheus e kube-state-metrics |
+| Logs | Grafana Alloy e Loki |
+| Traces | OpenTelemetry Spring Boot Starter, OpenTelemetry Collector e Tempo |
+| Dashboards | Grafana |
 
-## Arquitetura
-Veja o diagrama Mermaid e a descrição completa em [`docs/arquitetura.md`](docs/arquitetura.md).
+## 3. Estrutura principal do repositório
 
-`Navegador → Nginx/Angular (:4200) → /api → Spring Boot (:8080) → PgBouncer (:6432) → PostgreSQL (:5432)`
-
-> **Decisão documentada:** o enunciado cita três serviços (db, backend, frontend), mas exige PgBouncer; ele foi adicionado como serviço auxiliar de infraestrutura entre o backend e o banco.
-
-**Decisão de persistência:** o backend usa JDBC puro (Repositories com SQL explícito) em vez de JPA, porque grande parte da lógica está no banco (Function, Procedures, Views, Triggers) e o SQL explícito deixa isso visível e demonstrável. As respostas são `records` (DTOs).
-
-## Requisitos
-- Docker Desktop (Windows) com Docker Compose v2.
-- Git Bash ou WSL (apenas para os scripts `.sh` de teste).
-
-## Instalação e execução (Windows)
-Na **raiz do projeto** (pasta `g7-academia`), no PowerShell ou Git Bash:
-```bash
-copy .env.example .env        # PowerShell/CMD   (Git Bash: cp .env.example .env)
-# edite .env e troque as senhas e o JWT_SECRET (mín. 32 caracteres)
-docker compose up --build
+```text
+backend/                  API Spring Boot
+frontend/                 SPA Angular e configuração Nginx
+bd/                       Configuração e backup SQL do PostgreSQL
+k8s/                      Manifestos Kubernetes da aplicação e do banco
+  observability/          Manifestos da stack de observabilidade
+scripts/k8s/              Scripts PowerShell das etapas
+apresentacao/             Material da apresentação do projeto
+ docs/                    Documentação da arquitetura
+ evidencias/              Capturas de tela para avaliação
 ```
-- Aplicação: http://localhost:4200
-- API (somente localhost): http://localhost:8080
-- PostgreSQL (somente localhost, uso opcional): `127.0.0.1:5433`
 
-O banco só é inicializado na **primeira** subida do volume. Para recriar do zero: `docker compose down -v` e depois `docker compose up --build`.
+## 4. Pré-requisitos
 
-### Credenciais de demonstração (exclusivas do ambiente local)
-| Perfil | E-mail | Senha |
-|---|---|---|
-| ADMIN | `admin@g7.local` | `Admin@123` |
-| OPERADOR | `operador@g7.local` | `Operador@123` |
+- Windows 10/11.
+- Docker Desktop instalado e em execução.
+- Minikube.
+- kubectl.
+- GitHub Desktop.
+- Conexão com a internet para baixar imagens e dependências na primeira compilação.
 
-Senhas de banco e `JWT_SECRET` ficam no `.env` (não versionado).
+Instalação pelo WinGet (quando necessário):
 
-### Permissões na API
-| Recurso | ADMIN | OPERADOR |
-|---|---|---|
-| Alunos, matrículas, mensalidades, acessos, dashboard | ✔ | ✔ |
-| Planos (criar/editar) | ✔ | consulta |
-| Auditoria, recálculo de inadimplência, refresh do faturamento | ✔ | ✘ (403) |
+```powershell
+winget install Kubernetes.minikube
+winget install -e --id Kubernetes.kubectl
+```
 
-## Banco de dados
-Arquivos em `bd/`: `postgresql.conf`, `pg_hba.conf`, `pgbouncer.ini`, `backup.sql` (estrutura + seeds), `init-usuarios.sh` (cria usuários com senhas do `.env`).
+Se o Minikube estiver instalado em `C:\Program Files\Kubernetes\Minikube` e o PowerShell não reconhecer o comando, adicione o diretório ao PATH da sessão:
 
-**Schemas:** `app` (operadores, alunos, planos, matrículas, registros_acesso) · `financeiro` (mensalidades, views, view materializada) · `audit` (auditoria_vencimentos).
+```powershell
+$env:Path = "C:\Program Files\Kubernetes\Minikube;$env:Path"
+```
 
-**Roles e usuários**
-| Role/usuário | Tipo | Permissões |
-|---|---|---|
-| `rl_leitor` | grupo | SELECT (sem `senha_hash`) |
-| `rl_escritor` | grupo (herda leitor) | INSERT/UPDATE nas tabelas de negócio; sem DELETE; sem escrita direta em `audit`; EXECUTE nas rotinas |
-| `app_user` | login (backend) | membro de `rl_escritor`, não é superusuário |
-| `leitor_user` | login (consultas) | membro de `rl_leitor` |
+## 5. Subir o cluster Minikube
 
-**Functions**
-- `financeiro.fn_aluno_inadimplente(aluno)` — há mensalidade em aberto com `CURRENT_DATE > data_vencimento + 5`?
-- `app.fn_verificar_acesso(aluno)` — autoriza ou nega (inativo, inadimplente, sem matrícula vigente).
-- `app.fn_registrar_acesso(aluno, operador)` — verifica e grava a tentativa em `registros_acesso`.
+Abra o Docker Desktop e aguarde sua inicialização. Na raiz do repositório:
 
-**Procedures**
-- `financeiro.sp_atualizar_inadimplencia(INOUT bloqueados, INOUT desbloqueados)` — marca mensalidades ATRASADA, bloqueia e desbloqueia alunos (aluno INATIVO nunca é alterado).
-- `financeiro.sp_atualizar_faturamento()` — `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+```powershell
+minikube start --driver=docker
+kubectl wait --for=condition=Ready node/minikube --timeout=180s
+kubectl get nodes
+```
 
-**Triggers**
-- `trg_mensalidade_status_aluno` — recalcula o status do aluno quando uma mensalidade é inserida, removida ou tem status/vencimento alterado.
-- `trg_auditar_vencimento` — registra em `audit.auditoria_vencimentos` (anterior, novo, data/hora, usuário, justificativa). O backend informa usuário e justificativa com `set_config('app.usuario'|'app.justificativa', ..., true)` na mesma transação.
+Preparar o namespace e os recursos iniciais:
 
-**Views:** `financeiro.vw_mensalidades_detalhe`, `financeiro.vw_situacao_financeira_aluno`, `app.vw_dashboard`. **Materialized View:** `financeiro.mv_faturamento_mensal` (mês, quantidade de pagamentos, total recebido, total arrecadado acumulado).
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\k8s\etapa1-preparar.ps1
+```
 
-**Regra de inadimplência (3 camadas):** (1) trigger ao alterar mensalidades; (2) Procedure agendada pelo Spring a cada 5 min (`@Scheduled`), pois a passagem do tempo não dispara trigger; (3) revalidação em tempo real na Function de acesso.
+## 6. Implantar o PostgreSQL
 
-**Segurança:** pgcrypto (senhas dos seeds com `crypt(..., gen_salt('bf'))`, BCrypt compatível com Spring); `scram-sha-256`; `pg_hba.conf` só aceita 127.0.0.1 e a rede `172.28.0.0/24`; `statement_timeout=30s`; `idle_in_transaction_session_timeout=60s`; `REVOKE` de acesso público; funções `SECURITY DEFINER` com `search_path` fixo; JWT com segredo por variável de ambiente; CORS restrito à origem configurada; prepared statements em todas as consultas.
+Na raiz do repositório:
 
-**PgBouncer:** `pool_mode=transaction`, `default_pool_size=10` (Hikari `maximum-pool-size=10`), `max_prepared_statements=100` (permite prepared statements nomeados), autenticação SCRAM. O `userlist.txt` é gerado em `/tmp` na subida do container a partir do `.env` (nenhum segredo no repositório).
+```powershell
+.\scripts\k8s\etapa2-postgres.ps1
+```
 
-**Dados de demonstração:** Ana (ativa, mensalidade paga e outra a vencer), Bruno (vencida há 3 dias — inadimplente, **não** bloqueado), Carla (vencida há 10 dias — **bloqueada**), Diego e Elisa (em dia). As datas são relativas à data de execução.
+O banco utiliza PostgreSQL 16, StatefulSet, PVC persistente de 2 GiB e o Service interno `db-service` na porta 5432. O backup inicial contém os schemas, tabelas, rotinas e dados de demonstração do G7 Academia.
 
-## API REST (principais endpoints)
-Autenticação: `Authorization: Bearer <token>` (exceto login). Erros: JSON `{timestamp,status,erro,detalhes}`.
+Na execução relatada, o PostgreSQL ficou `Running 1/1`, o PVC ficou `Bound`, a consulta retornou **5 alunos** e foram identificadas as tabelas `alunos`, `matriculas`, `operadores`, `planos` e `registros_acesso` no schema `app`.
 
-| Método e rota | Descrição |
+Se o StatefulSet precisar da correção de inicialização já utilizada neste ambiente, aplicar o manifesto atualizado e executar o script de recuperação disponibilizado para a Etapa 2. **Não excluir o PVC `postgres-data-postgres-0`**, pois ele contém os dados persistentes.
+
+## 7. Implantar a aplicação replicada
+
+Executar:
+
+```powershell
+.\scripts\k8s\etapa3-aplicacao.ps1
+```
+
+O script constrói as imagens do projeto e implanta PgBouncer, backend e frontend. A configuração usada prevê:
+
+- Backend Spring Boot: 2 réplicas.
+- Frontend Angular/Nginx: 2 réplicas.
+- PgBouncer: 1 réplica.
+- PostgreSQL: 1 StatefulSet com volume persistente.
+
+Conferir os recursos:
+
+```powershell
+kubectl get deployments,pods,services -n g7-academia
+```
+
+Para abrir a aplicação:
+
+```powershell
+minikube service app-service -n g7-academia --url
+```
+
+Mantenha o terminal desse comando aberto enquanto utilizar a URL apresentada.
+
+## 8. Instalar a stack de observabilidade
+
+Executar:
+
+```powershell
+.\scripts\k8s\etapa4-observabilidade.ps1
+```
+
+O script cria o namespace `observability`, solicita uma senha para o usuário `admin` do Grafana, aplica os manifestos e recompila o backend com instrumentação de métricas e traces.
+
+### Versão do OpenTelemetry Collector
+
+No ambiente utilizado, a tag `otel/opentelemetry-collector-contrib:0.165.1` não foi encontrada no registry. O manifesto `k8s/observability/30-otel-collector.yaml` foi ajustado para usar `otel/opentelemetry-collector-contrib:0.165.0`, que foi baixada e iniciou com a mensagem `Everything is ready. Begin running and processing data.`
+
+### Componentes implantados
+
+| Componente | Função |
 |---|---|
-| `POST /api/auth/login` | Login (`email`, `senha`) → token JWT |
-| `GET/POST /api/alunos` · `GET/PUT/DELETE /api/alunos/{id}` | CRUD (DELETE = desativar) |
-| `PATCH /api/alunos/{id}/reativar` · `GET /api/alunos/{id}/situacao-financeira` | Reativação e situação financeira |
-| `GET/POST /api/planos` · `GET/PUT /api/planos/{id}` | Planos (escrita: ADMIN) |
-| `GET/POST /api/matriculas` · `GET/PATCH /api/matriculas/{id}` | Matrículas e alteração contratual |
-| `GET/POST /api/mensalidades` · `GET /api/mensalidades/{id}` | Consulta e lançamento |
-| `POST /api/mensalidades/{id}/pagamento` | Registro de pagamento |
-| `PATCH /api/mensalidades/{id}/vencimento` | Altera vencimento (gera auditoria) |
-| `POST /api/mensalidades/{id}/cancelar` | Cancela mensalidade em aberto |
-| `POST /api/acessos` · `GET /api/acessos` | Registra tentativa de acesso · histórico |
-| `GET /api/dashboard` | Indicadores e acessos recentes |
-| `GET /api/financeiro/faturamento` | Lê a view materializada |
-| `POST /api/financeiro/faturamento/atualizar` | ADMIN: Procedure de refresh |
-| `POST /api/financeiro/inadimplencia/recalcular` | ADMIN: Procedure de inadimplência |
-| `GET /api/auditoria/vencimentos?mensalidadeId=` | ADMIN: auditoria |
+| Prometheus | Coleta métricas da aplicação e do cluster |
+| kube-state-metrics | Expõe estado dos objetos Kubernetes |
+| Loki | Armazena logs dos Pods |
+| Grafana Alloy | Descobre e encaminha logs do Kubernetes ao Loki |
+| Tempo | Armazena traces distribuídos |
+| OpenTelemetry Collector | Recebe OTLP e exporta traces para Tempo |
+| Grafana | Centraliza fontes de dados e dashboards |
 
-## Testes
-Com os containers no ar, na raiz do projeto:
-```bash
-# 1) Banco (Function, Procedure, Triggers, Views, MV, auditoria, BCrypt) — roda em transação com ROLLBACK
-docker compose exec db psql -U postgres -d g7_academia -f /scripts/testes-banco.sql
+Conferir:
 
-# 2) Permissões, timeouts e PgBouncer
-bash scripts/testes-permissoes.sh
-
-# 3) API ponta a ponta (login, CRUD, pagamento, bloqueio/desbloqueio, auditoria, perfis)
-bash scripts/testes-api.sh
+```powershell
+kubectl get deployments,pods,services,pvc -n observability
+kubectl get deployments,pods -n g7-academia
 ```
-O `testes-api.sh` altera dados (cria aluno/plano e paga mensalidades dos seeds); para repetir, recrie o banco com `docker compose down -v`.
 
-## Comandos úteis
-```bash
-docker compose ps                     # estado e healthchecks
-docker compose logs -f backend        # logs do backend
-docker compose exec db psql -U postgres -d g7_academia   # console SQL
-docker compose down -v                # derruba tudo e apaga o volume do banco
-```
-Desenvolvimento do frontend sem Docker (pasta `frontend`): `npm install` e `npx ng serve --proxy-config proxy.conf.json`.
+Abrir o Grafana:
 
-## Estrutura do repositório
+```powershell
+minikube service grafana -n observability --url
 ```
-backend/    Spring Boot (controller, service, repository, dto, security, config, exception)
-frontend/   Angular (core/{models,services,guards,interceptors}, layout, features/*)
-bd/         postgresql.conf, pg_hba.conf, pgbouncer.ini, backup.sql, init-usuarios.sh
-scripts/    testes-banco.sql, testes-permissoes.sh, testes-api.sh
-apresentacao/  roteiro.md
-docs/       arquitetura.md
+
+Entrar com usuário `admin` e a senha definida durante a instalação. A senha é armazenada em Secret do Kubernetes; não a incluir nos arquivos versionados.
+
+## 9. Consultas úteis no Grafana
+
+### Prometheus — métricas
+
+No Grafana, abrir **Explore → Prometheus**, selecionar **Code**, executar e clicar em **Run query**:
+
+```promql
+up
 ```
-Volumes e dados físicos do PostgreSQL **não** são versionados (volume Docker nomeado `pgdata`).
+
+Estado dos Pods do namespace da aplicação:
+
+```promql
+kube_pod_status_ready{namespace="g7-academia",condition="true"}
+```
+
+Uso de CPU por Pod:
+
+```promql
+sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="g7-academia",container!="",image!=""}[5m]))
+```
+
+### Loki — logs
+
+No Grafana, abrir **Explore → Loki** e executar:
+
+```logql
+{project="g7-academia"}
+```
+
+### Tempo — traces
+
+No Grafana, abrir **Explore → Tempo → Search**, selecionar um intervalo de tempo e pesquisar o serviço `g7-academia-backend`. O backend envia traces via OTLP gRPC ao serviço `otel-collector.observability:4317`, que encaminha os dados ao Tempo.
+
+## 10. Evidências da atividade
+
+As capturas devem ser salvas na pasta `evidencias/` e referenciadas aqui:
+
+| Evidência | Arquivo | Situação do material disponível |
+|---|---|---|
+| Pods, Deployments e Services (2 réplicas do backend e frontend) | `evidencia-03-01-pods-deployments-services.png` | Captura ainda deve ser colocada na pasta |
+| Aplicação G7 Academia no navegador | `evidencia-03-02-g7-academia-navegador.png` | Captura final sem mensagem de erro de login ainda deve ser colocada |
+| Prometheus no Grafana | `evidencia-04-01-grafana-prometheus.png` | A consulta `up` foi executada; incluir a captura dos resultados |
+| Loki no Grafana | `evidencia-04-02-grafana-loki.png` | Captura incluída nesta pasta |
+| Tempo no Grafana | `evidencia-04-03-grafana-tempo.png` | Captura ainda deve ser colocada |
+
+> Não inserir capturas fictícias. A evidência do Loki incluída mostra registros de log do projeto. Para a avaliação, completar a pasta com as capturas reais solicitadas pelo professor.
+
+## 11. Segurança e versionamento
+
+- Não versionar `.env`, tokens JWT, senhas do banco ou senha administrativa do Grafana.
+- Manter `.env` ignorado pelo `.gitignore`.
+- O PostgreSQL não é publicado externamente; o acesso é feito pelo Service interno `db-service`.
+- O login do G7 Academia usa JWT e perfis de acesso.
+- Os manifestos e scripts devem ser versionados; dados físicos dos PVCs não devem ser adicionados ao Git.
+
+## 12. Commits sugeridos por etapa
+
+```text
+chore: importar projeto inicial G7 Academia
+infra: preparar ambiente Kubernetes
+feat(k8s): implantar PostgreSQL com volume persistente
+feat(k8s): implantar aplicação replicada
+feat(observability): configurar Prometheus Loki Tempo OpenTelemetry e Grafana
+docs: finalizar documentação e evidências da atividade
+```
+
+## 13. Integrantes
+
+- Davi Martins
+- Caio Vinicius

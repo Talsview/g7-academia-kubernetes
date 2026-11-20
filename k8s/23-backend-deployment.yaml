@@ -8,8 +8,8 @@ metadata:
     app.kubernetes.io/part-of: g7-academia
 spec:
   replicas: 2
-  revisionHistoryLimit: 2
-  progressDeadlineSeconds: 180
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 240
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -23,11 +23,15 @@ spec:
       labels:
         app.kubernetes.io/name: backend
         app.kubernetes.io/part-of: g7-academia
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: "8080"
     spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: backend
-          image: g7-academia-backend:stage3
+          image: g7-academia-backend:stage4-cors
           imagePullPolicy: Never
           env:
             - name: DB_URL
@@ -48,7 +52,23 @@ spec:
                   name: g7-app-secret
                   key: JWT_SECRET
             - name: JAVA_TOOL_OPTIONS
-              value: "-XX:MaxRAMPercentage=65.0 -XX:InitialRAMPercentage=20.0"
+              value: "-XX:MaxRAMPercentage=55.0 -XX:InitialRAMPercentage=15.0"
+            - name: OTEL_SERVICE_NAME
+              value: g7-academia-backend
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=g7-academia,deployment.environment=local
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4317
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_always_on
           ports:
             - name: http
               containerPort: 8080
@@ -71,14 +91,14 @@ spec:
             httpGet:
               path: /actuator/health
               port: http
-            initialDelaySeconds: 20
+            initialDelaySeconds: 25
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           resources:
             requests:
-              cpu: 100m
-              memory: 192Mi
+              cpu: 150m
+              memory: 256Mi
             limits:
-              cpu: 750m
-              memory: 512Mi
+              cpu: "1"
+              memory: 768Mi

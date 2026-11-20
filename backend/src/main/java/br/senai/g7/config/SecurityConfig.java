@@ -21,8 +21,8 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 /**
- * Configuração de segurança: API stateless com JWT, regras de acesso por perfil (ADMIN/OPERADOR),
- * BCrypt para senhas e CORS restrito à origem configurada.
+ * Segurança da API: sessão stateless com JWT, regras por perfil e CORS restrito
+ * à origem configurada e aos endereços locais usados pelo Minikube.
  */
 @Configuration
 public class SecurityConfig {
@@ -33,11 +33,11 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, JwtService jwt) throws Exception {
         http
-            .csrf(AbstractHttpConfigurer::disable)           // API stateless com JWT (sem cookies)
+            .csrf(AbstractHttpConfigurer::disable)
             .cors(Customizer.withDefaults())
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/auth/login", "/actuator/health").permitAll()
+                .requestMatchers("/api/auth/login", "/actuator/health", "/actuator/prometheus").permitAll()
                 .requestMatchers("/api/auditoria/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/planos/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/planos/**").hasRole("ADMIN")
@@ -57,13 +57,24 @@ public class SecurityConfig {
         res.getWriter().write("{\"status\":" + status + ",\"erro\":\"" + msg + "\",\"detalhes\":[]}");
     }
 
-    /** CORS restritivo: somente a origem configurada (o Nginx do frontend usa mesma origem via proxy). */
+    /**
+     * O frontend usa o Nginx como proxy reverso. No Minikube, a URL publicada
+     * costuma ser http://127.0.0.1:<porta> (ou localhost:<porta>), enquanto
+     * CORS_ALLOWED_ORIGIN mantém o valor usado no desenvolvimento local.
+     * Somente loopback e o IP local padrão do Minikube são aceitos; não há '*'.
+     */
     @Bean
     CorsConfigurationSource corsConfigurationSource(@Value("${g7.cors.allowed-origin}") String origem) {
         CorsConfiguration c = new CorsConfiguration();
-        c.setAllowedOrigins(List.of(origem));
+        c.setAllowedOriginPatterns(List.of(
+            origem,
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://192.168.49.2:*"
+        ));
         c.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        c.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        c.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
+        c.setAllowCredentials(false);
         c.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource s = new UrlBasedCorsConfigurationSource();
         s.registerCorsConfiguration("/api/**", c);

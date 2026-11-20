@@ -328,7 +328,7 @@ docs: finalizar documentação e evidências da atividade
 ## 13. Integrantes
 
 - **Davi Martins**
-- **Caio Vinicius**
+- **Caio Viniciu**
 
 ---
 

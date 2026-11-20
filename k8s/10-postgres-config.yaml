@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: g7-academia
+  labels:
+    app.kubernetes.io/part-of: g7-academia
+data:
+  postgresql.conf: |
+    # Configuração do PostgreSQL 16 para o cluster Kubernetes do G7 Academia.
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 50
+    shared_buffers = 128MB
+    password_encryption = 'scram-sha-256'
+    hba_file = '/etc/postgresql/pg_hba.conf'
+    statement_timeout = '30s'
+    idle_in_transaction_session_timeout = '60s'
+    lock_timeout = '10s'
+    log_destination = 'stderr'
+    log_connections = on
+    log_disconnections = on
+    log_min_duration_statement = 500
+    log_line_prefix = '%t [%p] %u@%d '
+    timezone = 'America/Sao_Paulo'
+  pg_hba.conf: |
+    # Conexões locais para administração/healthcheck.
+    local   all            postgres                       peer
+    local   all            all                            scram-sha-256
+    host    g7_academia    all         127.0.0.1/32       scram-sha-256
+    # Minikube usa endereços privados na rede dos Pods. O Service do banco
+    # continuará sendo ClusterIP e não será publicado externamente.
+    host    g7_academia    all         10.0.0.0/8         scram-sha-256
+    # Rejeita conexões fora da rede interna explicitamente permitida.
+    host    all            all         0.0.0.0/0          reject
+    host    all            all         ::/0               reject
